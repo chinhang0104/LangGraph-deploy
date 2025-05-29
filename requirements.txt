@@ -3,6 +3,7 @@ fastapi==0.115.12
 langchain==0.3.25
 langchain_community==0.3.24
 langchain_core==0.3.62
+langchain-groq==0.3.2
 langgraph==0.4.7
 langserve==0.3.1
 pydantic==2.11.5
