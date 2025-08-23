@@ -14,7 +14,7 @@ docker build -t chatbot .
 ```
 Run the following command to open the port. 
 ```bash
-docker run -p 8000:8000 chatbot
+docker run -p 8001:8001 chatbot
 ```
 
 ## Environment
