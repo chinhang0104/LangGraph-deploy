@@ -1,2 +1,5 @@
 .ipynb_checkpoints/
 .env
+lilianwen_db/
+.db
+__pycache__/

@@ -1,27 +1,19 @@
 import os
-from dotenv import load_dotenv
-import getpass
-import json
+import uuid
 from pydantic import BaseModel
-from typing import Annotated
-from typing_extensions import TypedDict
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from langchain.chat_models import init_chat_model
-from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_core.messages import ToolMessage
+from langgraph.graph import StateGraph, START, MessagesState, END
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
-
-# Load environment variables from .env file
-load_dotenv()
-
-# Check the environment variables
-env_vars = ['TAVILY_API_KEY', 'GROQ_API_KEY']
-for env_var in env_vars:
-    if env_var not in os.environ:
-        raise RuntimeError(f"The required environment variable '{env_var}' is not set.")
+from agents.research import create_research_agent
+from agents.retriever import get_retriever_tool
+from agents.sql import *
+from agents.supervisor import create_task_description_handoff_tool, create_supervisor_agent_with_description
+from tools.chinook_db import get_sql_db_tool
+from tools.lilianweng_vectorstore import get_vectorstore
+#from tools.postgres_chat_message_history import init_chat_history_manager
 
 app = FastAPI()
 
@@ -29,105 +21,88 @@ app = FastAPI()
 async def redirect_root_to_docs():
     return RedirectResponse("/docs")
 
-# tool
-# Loading up search engine 
-search = TavilySearchResults(max_results=2)
-tools = [search]
+# Load Groq environment variables from .env file
+load_dotenv()
 
-# llm
-llm = init_chat_model("llama3-8b-8192", model_provider="groq")
+# Init llm model
+llm = init_chat_model("llama-3.3-70b-versatile", model_provider="groq")
 
-# tell the LLM which tools it can call
-llm_with_tools = llm.bind_tools(tools)
+# RAG
+vectorstore = get_vectorstore()
+retriever_tool = get_retriever_tool(vectorstore, "retrieve_blog_posts", "Search and return information about Lilian Weng blog posts.")
 
-# The class is a dict to store messages returned by llm
-# The key "messages" has a value of list
-# The update rule of "messages" value is appending the list instead of overwritting it
-class State(TypedDict):
-    messages: Annotated[list, add_messages]
+# Web search
+research_agent = create_research_agent(llm)
 
-graph_builder = StateGraph(State)
+# SQL
+db_tools, db = get_sql_db_tool(llm)
+set_llm(llm)
+set_tools(db_tools)
+set_db(db)
+get_schema_node = get_get_schema_node()
+run_query_node = get_run_query_node()
 
-def chatbot(state: State):
-    return {"messages": [llm_with_tools.invoke(state["messages"])]}
-
-graph_builder.add_node("chatbot", chatbot)
-
-class BasicToolNode:
-    """A node that runs the tools requested in the last AIMessage."""
-
-    def __init__(self, tools: list) -> None:
-        # dict of tools
-        self.tools_by_name = {tool.name: tool for tool in tools}
-
-    def __call__(self, inputs: dict):
-        # get the most recent message in the state dict
-        if messages := inputs.get("messages", []):
-            message = messages[-1]
-        else:
-            raise ValueError("No message found in input")
-        outputs = []
-        # calls tools if the message contains tool_calls
-        for tool_call in message.tool_calls:
-            tool_result = self.tools_by_name[tool_call["name"]].invoke(
-                tool_call["args"]
-            )
-            outputs.append(
-                ToolMessage(
-                    content=json.dumps(tool_result),
-                    name=tool_call["name"],
-                    tool_call_id=tool_call["id"],
-                )
-            )
-        return {"messages": outputs}
-
-tool_node = BasicToolNode(tools=[search])
-graph_builder.add_node("tools", tool_node)
-
-# Define the conditional_edges
-def route_tools(
-    state: State,
-):
-    """
-    Use in the conditional_edge to route to the ToolNode if the last message
-    has tool calls. Otherwise, route to the end.
-    """
-    if isinstance(state, list):
-        ai_message = state[-1]
-    elif messages := state.get("messages", []):
-        ai_message = messages[-1]
-    else:
-        raise ValueError(f"No messages found in input state to tool_edge: {state}")
-    if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
-        return "tools"
-    return END
-
-# The `tools_condition` function returns "tools" if the chatbot asks to use a tool, and "END" if
-# it is fine directly responding. This conditional routing defines the main agent loop.
-graph_builder.add_conditional_edges(
-    "chatbot",
-    route_tools,
-    # The following dictionary lets you tell the graph to interpret the condition's outputs as a specific node
-    # It defaults to the identity function, but if you
-    # want to use a node named something else apart from "tools",
-    # You can update the value of the dictionary to something else
-    # e.g., "tools": "my_tools"
-    {"tools": "tools", END: END},
+# Handoffs tools
+assign_to_research_agent_with_description = create_task_description_handoff_tool(
+    agent_name="research_agent",
+    description="Assign task to a researcher agent.",
 )
 
-# Any time a tool is called, we return to the chatbot to decide the next step
-graph_builder.add_edge("tools", "chatbot")
-graph_builder.add_edge(START, "chatbot")
+assign_to_retriever_agent_with_description = create_task_description_handoff_tool(
+    agent_name="retriever",
+    description="Assign task to a rag agent.",
+)
+
+assign_to_sql_agent_with_description = create_task_description_handoff_tool(
+    agent_name="sql_agent",
+    description="Assign task to a rag agent.",
+)
+supervisor_handoffs_tools = [assign_to_research_agent_with_description,
+                             assign_to_retriever_agent_with_description,
+                             assign_to_sql_agent_with_description]
+
+# Supervisor agent
+supervisor_agent_with_description = create_supervisor_agent_with_description(llm, supervisor_handoffs_tools) # Change tools here
+
+# Define the graph
+builder = StateGraph(MessagesState)
+builder.add_node(
+    supervisor_agent_with_description, destinations=("research_agent", "retrieve", "sql_agent", END)
+)
+# Add nodes otherthan SQL
+builder.add_node(research_agent)
+builder.add_node("retrieve", ToolNode([retriever_tool]))
+
+# Add edges otherthan SQL
+builder.add_edge(START, "supervisor")
+builder.add_edge("research_agent", "supervisor")
+builder.add_edge("retrieve", "supervisor")
+
+# SQL agent
+builder.add_node(sql_agent)
+builder.add_node(list_tables)
+builder.add_node(call_get_schema)
+builder.add_node(get_schema_node, "get_schema")
+builder.add_node(generate_query)
+builder.add_node(check_query)
+builder.add_node(run_query_node, "run_query")
+
+builder.add_edge("sql_agent", "list_tables")
+builder.add_edge("list_tables", "call_get_schema")
+builder.add_edge("call_get_schema", "get_schema")
+builder.add_edge("get_schema", "generate_query")
+builder.add_conditional_edges(
+    "generate_query",
+    should_continue,
+)
+builder.add_edge("check_query", "run_query")
+builder.add_edge("run_query", "generate_query")
 
 # MemorySaver helps remember chat history
 # Use SqliteSaver or PostgresSaver and connect a database for persistent store. 
 memory = MemorySaver() # In-Memory Saver, for demo only
-graph = graph_builder.compile(checkpointer=memory)
 
-# Set up system message, set None to disable
-system_message = '''You are a helpful customer support assistant.
-                    Whenever you do not know the answer or need up-to-date information, 
-                    perform a web search to find accurate and relevant results before responding.'''
+agent = builder.compile(checkpointer=memory)
 
 # Define Pydantic model for request body
 class QuestionRequest(BaseModel):
@@ -135,21 +110,41 @@ class QuestionRequest(BaseModel):
     user_id: int
     thread_id: int
 
+#Use stream_mode "values" for real application. Use stream_mode "debug" for debug. 
+stream_mode="values"
+
+# Invoke the graph, return answer from chatbot
 @app.post("/generate")
-async def stream_graph_updates(request: QuestionRequest, system_message: str = system_message):          
-    messages = [{"role": "system", "content": system_message}, {"role": "user", "content": request.question}]        
-    config={"configurable": {"user_id": request.user_id, "thread_id": request.thread_id}}    
+async def stream_graph_updates(request: QuestionRequest):
     try:
-        outputs = []
-        for output in graph.stream({"messages": messages}, config):
-            print(output)
-            for key, value in output.items():
-                outputs.append({key: value})
-        # print('outputs', outputs)
-        return {"result": outputs}
+        steps = []
+        for step in agent.stream(
+            {"messages": [{"role": "user", "content": request.question}]}, 
+            config= {"configurable": {"user_id": request.user_id, "thread_id": request.thread_id}},        
+            stream_mode=stream_mode, 
+        ):
+            # if stream_mode == "debug":
+            print(step) 
+            steps.append(step)
+        # if stream_mode == "debug":
+        #     return steps
+        # Sometimes supervisor will silence if toolnodes answer the user question.
+        # In this case, we return the message from toolnodes
+        if steps[-1]['messages'][-1].content:
+            return {"result": steps[-1]['messages'][-1].content} #supervisor message
+        else:
+            return {"result": steps[-1]['messages'][-2].content} #toolnodes message
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+# # Set up chat history store
+# if stream_mode == "values":
+#     DATABASE_URL = os.getenv('DATABASE_URL')
+#     session_id = str(uuid.uuid4())
+#     chat_history = init_chat_history_manager(DATABASE_URL, session_id)
+#     # Add messages to database
+#     chat_history.add_messages(steps[-1]['messages'])
+
 if __name__ == "__main__":
     import uvicorn
 
