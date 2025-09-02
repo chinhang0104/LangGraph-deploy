@@ -1,7 +1,7 @@
 # LangGraph Chatbot
 
 This project is a deployment version for chatbot application using LangGraph.
-You can find demo walkthough on [LangChain Notebook](https://github.com/chinhang0104/LangChain) and [Web UI](https://github.com/chinhang0104/Chatbot-Web) connect this project with API. 
+You can find demo walkthough on [LangChain Notebook](https://github.com/chinhang0104/LangChain) and [Web UI](https://github.com/chinhang0104/chatbot-web) connect this project with API. 
 
 ## Run program
 Run server.py to open an API port.  
