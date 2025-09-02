@@ -1,5 +1,6 @@
 .ipynb_checkpoints/
 .env
 lilianwen_db/
-.db
+*.db
 __pycache__/
+ws-client/
