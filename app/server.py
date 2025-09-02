@@ -1,9 +1,11 @@
 import os
 import uuid
+import asyncio
+from typing import Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Request, HTTPException, WebSocket
+from fastapi.responses import RedirectResponse, StreamingResponse
 from langchain.chat_models import init_chat_model
 from langgraph.graph import StateGraph, START, MessagesState, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -107,13 +109,10 @@ agent = builder.compile(checkpointer=memory)
 # Define Pydantic model for request body
 class QuestionRequest(BaseModel):
     question: str
-    user_id: int
-    thread_id: int
+    user_id: str
+    thread_id: str
 
-#Use stream_mode "values" for real application. Use stream_mode "debug" for debug. 
-stream_mode="values"
-
-# Invoke the graph, return answer from chatbot
+# Invoke the graph, return last answer from chatbot
 @app.post("/generate")
 async def stream_graph_updates(request: QuestionRequest):
     try:
@@ -121,7 +120,7 @@ async def stream_graph_updates(request: QuestionRequest):
         for step in agent.stream(
             {"messages": [{"role": "user", "content": request.question}]}, 
             config= {"configurable": {"user_id": request.user_id, "thread_id": request.thread_id}},        
-            stream_mode=stream_mode, 
+            stream_mode="values",  #Use stream_mode "values" for real application. Use stream_mode "debug" for debug. 
         ):
             # if stream_mode == "debug":
             print(step) 
@@ -136,6 +135,24 @@ async def stream_graph_updates(request: QuestionRequest):
             return {"result": steps[-1]['messages'][-2].content} #toolnodes message
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# Invoke the graph, return every message from chatbot
+@app.websocket("/ws/generate")
+async def websocket_generator(ws: WebSocket):
+    await ws.accept()
+    data = await ws.receive_json()
+    req = QuestionRequest(**data)
+
+    for step in agent.stream(
+        {"messages":[{"role":"user","content":req.question}]},
+        config={"configurable":{"user_id":req.user_id,"thread_id":req.thread_id}},
+        stream_mode="values",
+    ):        
+        msg = step["messages"][-1].content
+        print("message:" + msg)
+        await ws.send_json({"message": msg})
+
+    await ws.close()
 
 # # Set up chat history store
 # if stream_mode == "values":
