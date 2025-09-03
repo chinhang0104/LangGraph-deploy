@@ -10,11 +10,11 @@ from langchain.chat_models import init_chat_model
 from langgraph.graph import StateGraph, START, MessagesState, END
 from langgraph.checkpoint.memory import MemorySaver
 from agents.research import create_research_agent
-from agents.retriever import get_retriever_tool
-from agents.sql import *
+# from agents.retriever import get_retriever_tool
+# from agents.sql import *
 from agents.supervisor import create_task_description_handoff_tool, create_supervisor_agent_with_description
-from tools.chinook_db import get_sql_db_tool
-from tools.lilianweng_vectorstore import get_vectorstore
+# from tools.chinook_db import get_sql_db_tool
+#from tools.lilianweng_vectorstore import get_vectorstore
 #from tools.postgres_chat_message_history import init_chat_history_manager
 
 app = FastAPI()
@@ -30,19 +30,19 @@ load_dotenv()
 llm = init_chat_model("llama-3.3-70b-versatile", model_provider="groq")
 
 # RAG
-vectorstore = get_vectorstore()
-retriever_tool = get_retriever_tool(vectorstore, "retrieve_blog_posts", "Search and return information about Lilian Weng blog posts.")
+# vectorstore = get_vectorstore()
+# retriever_tool = get_retriever_tool(vectorstore, "retrieve_blog_posts", "Search and return information about Lilian Weng blog posts.")
 
 # Web search
 research_agent = create_research_agent(llm)
 
 # SQL
-db_tools, db = get_sql_db_tool(llm)
-set_llm(llm)
-set_tools(db_tools)
-set_db(db)
-get_schema_node = get_get_schema_node()
-run_query_node = get_run_query_node()
+# db_tools, db = get_sql_db_tool(llm)
+# set_llm(llm)
+# set_tools(db_tools)
+# set_db(db)
+# get_schema_node = get_get_schema_node()
+# run_query_node = get_run_query_node()
 
 # Handoffs tools
 assign_to_research_agent_with_description = create_task_description_handoff_tool(
@@ -50,18 +50,19 @@ assign_to_research_agent_with_description = create_task_description_handoff_tool
     description="Assign task to a researcher agent.",
 )
 
-assign_to_retriever_agent_with_description = create_task_description_handoff_tool(
-    agent_name="retriever",
-    description="Assign task to a rag agent.",
-)
+# assign_to_retriever_agent_with_description = create_task_description_handoff_tool(
+#     agent_name="retriever",
+#     description="Assign task to a rag agent.",
+# )
 
-assign_to_sql_agent_with_description = create_task_description_handoff_tool(
-    agent_name="sql_agent",
-    description="Assign task to a rag agent.",
-)
+# assign_to_sql_agent_with_description = create_task_description_handoff_tool(
+#     agent_name="sql_agent",
+#     description="Assign task to a rag agent.",
+# )
 supervisor_handoffs_tools = [assign_to_research_agent_with_description,
-                             assign_to_retriever_agent_with_description,
-                             assign_to_sql_agent_with_description]
+                            #  assign_to_retriever_agent_with_description,
+                            #  assign_to_sql_agent_with_description
+                             ]
 
 # Supervisor agent
 supervisor_agent_with_description = create_supervisor_agent_with_description(llm, supervisor_handoffs_tools) # Change tools here
@@ -69,36 +70,36 @@ supervisor_agent_with_description = create_supervisor_agent_with_description(llm
 # Define the graph
 builder = StateGraph(MessagesState)
 builder.add_node(
-    supervisor_agent_with_description, destinations=("research_agent", "retrieve", "sql_agent", END)
+    supervisor_agent_with_description, destinations=("research_agent", END)
 )
 # Add nodes otherthan SQL
 builder.add_node(research_agent)
-builder.add_node("retrieve", ToolNode([retriever_tool]))
+# builder.add_node("retrieve", ToolNode([retriever_tool]))
 
 # Add edges otherthan SQL
 builder.add_edge(START, "supervisor")
 builder.add_edge("research_agent", "supervisor")
-builder.add_edge("retrieve", "supervisor")
+# builder.add_edge("retrieve", "supervisor")
 
 # SQL agent
-builder.add_node(sql_agent)
-builder.add_node(list_tables)
-builder.add_node(call_get_schema)
-builder.add_node(get_schema_node, "get_schema")
-builder.add_node(generate_query)
-builder.add_node(check_query)
-builder.add_node(run_query_node, "run_query")
+# builder.add_node(sql_agent)
+# builder.add_node(list_tables)
+# builder.add_node(call_get_schema)
+# builder.add_node(get_schema_node, "get_schema")
+# builder.add_node(generate_query)
+# builder.add_node(check_query)
+# builder.add_node(run_query_node, "run_query")
 
-builder.add_edge("sql_agent", "list_tables")
-builder.add_edge("list_tables", "call_get_schema")
-builder.add_edge("call_get_schema", "get_schema")
-builder.add_edge("get_schema", "generate_query")
-builder.add_conditional_edges(
-    "generate_query",
-    should_continue,
-)
-builder.add_edge("check_query", "run_query")
-builder.add_edge("run_query", "generate_query")
+# builder.add_edge("sql_agent", "list_tables")
+# builder.add_edge("list_tables", "call_get_schema")
+# builder.add_edge("call_get_schema", "get_schema")
+# builder.add_edge("get_schema", "generate_query")
+# builder.add_conditional_edges(
+#     "generate_query",
+#     should_continue,
+# )
+# builder.add_edge("check_query", "run_query")
+# builder.add_edge("run_query", "generate_query")
 
 # MemorySaver helps remember chat history
 # Use SqliteSaver or PostgresSaver and connect a database for persistent store. 
