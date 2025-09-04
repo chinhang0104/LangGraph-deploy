@@ -38,11 +38,11 @@ def create_supervisor_agent_with_description(llm: BaseChatModel, tools: List[Bas
         model=llm,
         tools=tools,
         prompt=(
-            "You are a chatbot master supervisoring agent:\n"
+            "You are a chatbot with a tool:\n"
             "- a research agent. The research agent search latest information on internet. Assign research-related tasks to this assistant.\n"
-            "Use transfer_to_research_agent if neccessary. Do Not use other agents.\n"
+            "Use transfer_to_research_agent if you need to gather more information. Do Not use other agents. Use tools only when necessary.\n"
             "Assign work to one agent at a time, do not call agents in parallel.\n"
-            "The user should only see the final response. When no further tool use is needed, finalize your answer to the user, including relevant references such as web links, document IDs, or database table names."
+            "The user should only see the final message. When no further tool use is needed, finalize your answer to the user, including relevant references such as web links, document IDs, or database table names."
         ),
         name="supervisor",
     )
